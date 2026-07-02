@@ -33,6 +33,27 @@ function isInitialBatchReady() {
   return getInitialLoadedCount() >= INITIAL_BATCH;
 }
 
+function getNearestFrame(frame: number) {
+  if (frameCache.has(frame)) {
+    return frameCache.get(frame) ?? null;
+  }
+
+  for (let offset = 1; offset <= KEEP_RADIUS; offset++) {
+    const nextFrame = frame + offset;
+    const previousFrame = frame - offset;
+
+    if (frameCache.has(nextFrame)) {
+      return frameCache.get(nextFrame) ?? null;
+    }
+
+    if (frameCache.has(previousFrame)) {
+      return frameCache.get(previousFrame) ?? null;
+    }
+  }
+
+  return frameCache.get(1) ?? null;
+}
+
 function loadImage(frame: number): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -136,7 +157,7 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
     enqueueFrames(frames);
   }, [enqueueFrames, totalFrames]);
 
-  const getFrame = useCallback((frameIndex: number) => frameCache.get(frameIndex + 1) ?? null, []);
+  const getFrame = useCallback((frameIndex: number) => getNearestFrame(frameIndex + 1), []);
 
   const setTargetFrame = useCallback((frameIndex: number) => {
     const frame = frameIndex + 1;
