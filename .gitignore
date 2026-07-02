@@ -1,0 +1,34 @@
+# dependencies
+node_modules/
+
+# next
+.next/
+out/
+
+# production
+build/
+dist/
+
+# env
+.env
+.env*.local
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# generated / local
+frames-png/
+frames-final/
+frames-webp/
+images/
+/videos/
+merge-frames.js
+tsconfig.tsbuildinfo
+
+# os / editor
+.DS_Store
+Thumbs.db
+.vscode/
