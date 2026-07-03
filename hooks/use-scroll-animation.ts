@@ -19,7 +19,7 @@ export function useScrollAnimation({ enabled, frameCount, onFrame, onProgress }:
       trigger: "[data-scroll-scene]",
       start: "top top",
       end: "bottom bottom",
-      scrub: 0.6,
+      scrub: 1.2,
       onUpdate: (self) => {
         const progress = self.progress;
         const frame = Math.min(frameCount - 1, Math.floor(progress * frameCount));

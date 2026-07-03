@@ -18,6 +18,9 @@ const MIN_LOADER_DURATION = 2400;
 
 export function ScrollScene() {
   const canvasRef = useRef<CanvasAnimationHandle | null>(null);
+  const displayedFrameRef = useRef(1);
+  const targetFrameRef = useRef(1);
+  const playbackRafRef = useRef<number | null>(null);
   const { getFrame, setTargetFrame, loaded, progress: loadProgress, status, error } = useFrameLoader(FRAME_TOTAL);
   const [loaderProgress, setLoaderProgress] = useState(0);
   const [minimumLoaderDone, setMinimumLoaderDone] = useState(false);
@@ -70,11 +73,35 @@ export function ScrollScene() {
     return () => document.removeEventListener("click", onClick);
   }, []);
 
+  const playTowardTarget = useCallback(() => {
+    const currentFrame = displayedFrameRef.current;
+    const targetFrame = targetFrameRef.current;
+
+    if (currentFrame === targetFrame) {
+      playbackRafRef.current = null;
+      return;
+    }
+
+    const delta = targetFrame - currentFrame;
+    const direction = Math.sign(delta);
+    const step = Math.min(Math.max(Math.ceil(Math.abs(delta) * 0.08), 1), 8);
+    const nextFrame = currentFrame + direction * Math.min(step, Math.abs(delta));
+
+    displayedFrameRef.current = nextFrame;
+    canvasRef.current?.renderFrame(nextFrame - 1);
+    setActiveFrame(nextFrame);
+
+    playbackRafRef.current = requestAnimationFrame(playTowardTarget);
+  }, []);
+
   const handleFrame = useCallback((frameIndex: number) => {
+    targetFrameRef.current = frameIndex + 1;
     setTargetFrame(frameIndex);
-    canvasRef.current?.renderFrame(frameIndex);
-    setActiveFrame(frameIndex + 1);
-  }, [setTargetFrame]);
+
+    if (!playbackRafRef.current) {
+      playbackRafRef.current = requestAnimationFrame(playTowardTarget);
+    }
+  }, [playTowardTarget, setTargetFrame]);
 
   useScrollAnimation({
     enabled: ready,
@@ -85,9 +112,15 @@ export function ScrollScene() {
 
   useEffect(() => {
     if (ready) {
-      canvasRef.current?.renderFrame(activeFrame - 1);
+      canvasRef.current?.renderFrame(displayedFrameRef.current - 1);
     }
   }, [activeFrame, loaded, ready]);
+
+  useEffect(() => () => {
+    if (playbackRafRef.current) {
+      cancelAnimationFrame(playbackRafRef.current);
+    }
+  }, []);
 
   return (
     <>
