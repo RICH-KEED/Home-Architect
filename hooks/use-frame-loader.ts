@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FRAME_TOTAL, getFrameSrc } from "@/lib/frames";
+import { FRAME_TOTAL, FRAME_STEP, getFrameSrc } from "@/lib/frames";
 import type { FrameLoaderState } from "@/types/frames";
 
 const CONCURRENCY = 24; // Optimal concurrency for HTTP/2 multiplexing
@@ -11,9 +11,30 @@ const MAX_RETRIES = 3;
 const frameCache = new Map<number, HTMLImageElement>();
 
 export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
-  const [loadedCount, setLoadedCount] = useState(frameCache.size);
+  // Generate list of target frames based on FRAME_STEP
+  const targetFrames = useRef<number[]>([]);
+  if (targetFrames.current.length === 0) {
+    const list: number[] = [];
+    for (let f = 1; f <= totalFrames; f += FRAME_STEP) {
+      list.push(f);
+    }
+    // Always include the last frame to ensure a clean animation finish
+    if (totalFrames > 0 && !list.includes(totalFrames)) {
+      list.push(totalFrames);
+    }
+    targetFrames.current = list;
+  }
+
+  const expectedTotal = targetFrames.current.length;
+
+  // Helper to count how many of our target frames are currently in cache
+  const getCachedTargetCount = () => {
+    return targetFrames.current.filter((f) => frameCache.has(f)).length;
+  };
+
+  const [loadedCount, setLoadedCount] = useState(getCachedTargetCount());
   const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">(
-    frameCache.size === totalFrames ? "ready" : "idle"
+    getCachedTargetCount() === expectedTotal ? "ready" : "idle"
   );
   const [error, setError] = useState<string | null>(null);
 
@@ -28,7 +49,7 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
       return frameCache.get(frame) ?? null;
     }
 
-    // Search outward for the nearest available frame
+    // Search outward for the nearest available preloaded frame
     const maxSearch = 60;
     for (let offset = 1; offset <= maxSearch; offset++) {
       const nextFrame = frame + offset;
@@ -44,36 +65,31 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
     // No-op. Preloading is fully completed upfront.
   }, []);
 
-  const progress = totalFrames > 0 ? loadedCount / totalFrames : 0;
+  const progress = expectedTotal > 0 ? loadedCount / expectedTotal : 0;
 
   // Transition to ready as soon as progress reaches 100%, bypassing delayed socket timeouts
   useEffect(() => {
-    if (loadedCount >= totalFrames) {
+    if (loadedCount >= expectedTotal) {
       setStatus("ready");
     }
-  }, [loadedCount, totalFrames]);
+  }, [loadedCount, expectedTotal]);
 
   useEffect(() => {
     if (startedRef.current) return;
     startedRef.current = true;
 
-    if (frameCache.size === totalFrames) {
+    const initialCached = getCachedTargetCount();
+    if (initialCached === expectedTotal) {
       setStatus("ready");
-      setLoadedCount(totalFrames);
+      setLoadedCount(expectedTotal);
       return;
     }
 
     setStatus("loading");
 
-    // Populate queue with only the frames that haven't been loaded yet
-    const framesToLoad: number[] = [];
-    for (let f = 1; f <= totalFrames; f++) {
-      if (!frameCache.has(f)) {
-        framesToLoad.push(f);
-      }
-    }
-
-    queueRef.current = framesToLoad;
+    // Populate queue with only the target frames that haven't been loaded yet
+    const queue = targetFrames.current.filter((f) => !frameCache.has(f));
+    queueRef.current = queue;
 
     let aborted = false;
 
@@ -84,24 +100,8 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
 
         img.onload = () => {
           if (aborted) return;
-
-          if (typeof img.decode === "function") {
-            img.decode()
-              .then(() => {
-                if (aborted) return;
-                frameCache.set(frame, img);
-                resolve(img);
-              })
-              .catch((err) => {
-                // If decoding fails, we still cache the image element so it can be drawn on canvas
-                // (it is still in browser cache and will decode on draw)
-                frameCache.set(frame, img);
-                resolve(img);
-              });
-          } else {
-            frameCache.set(frame, img);
-            resolve(img);
-          }
+          frameCache.set(frame, img);
+          resolve(img);
         };
 
         img.onerror = () => {
@@ -126,7 +126,7 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
       // When the queue is fully drained and active loads complete, transition to ready
       if (queueRef.current.length === 0 && activeLoadsRef.current === 0) {
         setStatus("ready");
-        setLoadedCount(frameCache.size);
+        setLoadedCount(getCachedTargetCount());
         return;
       }
 
@@ -139,7 +139,7 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
         loadImageWithRetry(frame)
           .then(() => {
             if (aborted) return;
-            setLoadedCount(frameCache.size);
+            setLoadedCount(getCachedTargetCount());
           })
           .catch((err) => {
             if (aborted) return;
@@ -147,7 +147,7 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
             // We still proceed and will fallback to the closest frame when rendering.
             console.warn(`Frame loader warning (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
             // We increment loaded count to keep the progress bar moving even if a frame is missing
-            setLoadedCount((prev) => Math.min(prev + 1, totalFrames));
+            setLoadedCount((prev) => Math.min(prev + 1, expectedTotal));
           })
           .finally(() => {
             if (aborted) return;
@@ -162,7 +162,7 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
     return () => {
       aborted = true;
     };
-  }, [totalFrames]);
+  }, [totalFrames, expectedTotal]);
 
   return {
     getFrame,
@@ -173,4 +173,3 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
     error,
   };
 }
-
