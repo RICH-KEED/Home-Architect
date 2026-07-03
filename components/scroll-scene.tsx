@@ -19,13 +19,12 @@ const MIN_LOADER_DURATION = 2400;
 export function ScrollScene() {
   const canvasRef = useRef<CanvasAnimationHandle | null>(null);
   const { getFrame, progress: loadProgress, status, error } = useFrameLoader(FRAME_TOTAL);
-  const [loaderProgress, setLoaderProgress] = useState(0);
   const [minimumLoaderDone, setMinimumLoaderDone] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
   const [activeFrame, setActiveFrame] = useState(1);
   
   const ready = (status === "ready" || loadProgress >= 1) && minimumLoaderDone;
-  const visibleLoaderProgress = ready ? 1 : Math.max(loadProgress, loaderProgress);
+  const visibleLoaderProgress = ready ? 1 : loadProgress;
   const loaderStatus = status === "error" ? status : ready ? "ready" : "loading";
 
   useLenis(ready);
@@ -45,25 +44,12 @@ export function ScrollScene() {
     };
   }, [ready]);
 
+  // Ensure loading screen is active for at least MIN_LOADER_DURATION to prevent visual flashes
   useEffect(() => {
-    let animationFrame = 0;
-    const startedAt = performance.now();
-
-    const tick = () => {
-      const progress = Math.min((performance.now() - startedAt) / MIN_LOADER_DURATION, 1);
-      setLoaderProgress(progress);
-
-      if (progress < 1) {
-        animationFrame = requestAnimationFrame(tick);
-        return;
-      }
-
+    const timer = setTimeout(() => {
       setMinimumLoaderDone(true);
-    };
-
-    animationFrame = requestAnimationFrame(tick);
-
-    return () => cancelAnimationFrame(animationFrame);
+    }, MIN_LOADER_DURATION);
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
