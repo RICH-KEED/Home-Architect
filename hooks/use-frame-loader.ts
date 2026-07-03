@@ -27,7 +27,7 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
     if (frameCache.has(frame)) {
       return frameCache.get(frame) ?? null;
     }
-    
+
     // Search outward for the nearest available frame
     const maxSearch = 60;
     for (let offset = 1; offset <= maxSearch; offset++) {
@@ -36,7 +36,7 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
       if (frameCache.has(nextFrame)) return frameCache.get(nextFrame) ?? null;
       if (frameCache.has(prevFrame)) return frameCache.get(prevFrame) ?? null;
     }
-    
+
     return frameCache.get(1) || null;
   }, []);
 
@@ -45,6 +45,13 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
   }, []);
 
   const progress = totalFrames > 0 ? loadedCount / totalFrames : 0;
+
+  // Transition to ready as soon as progress reaches 100%, bypassing delayed socket timeouts
+  useEffect(() => {
+    if (loadedCount >= totalFrames) {
+      setStatus("ready");
+    }
+  }, [loadedCount, totalFrames]);
 
   useEffect(() => {
     if (startedRef.current) return;
@@ -77,7 +84,7 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
 
         img.onload = () => {
           if (aborted) return;
-          
+
           if (typeof img.decode === "function") {
             img.decode()
               .then(() => {

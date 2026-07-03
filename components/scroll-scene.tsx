@@ -24,7 +24,7 @@ export function ScrollScene() {
   const [scrollProgress, setScrollProgress] = useState(0);
   const [activeFrame, setActiveFrame] = useState(1);
   
-  const ready = status === "ready" && minimumLoaderDone;
+  const ready = (status === "ready" || loadProgress >= 1) && minimumLoaderDone;
   const visibleLoaderProgress = ready ? 1 : Math.max(loadProgress, loaderProgress);
   const loaderStatus = status === "error" ? status : ready ? "ready" : "loading";
 
