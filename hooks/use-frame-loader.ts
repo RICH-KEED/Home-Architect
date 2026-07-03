@@ -4,177 +4,166 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { FRAME_TOTAL, getFrameSrc } from "@/lib/frames";
 import type { FrameLoaderState } from "@/types/frames";
 
-const INITIAL_BATCH = 24;
-const PRELOAD_AHEAD = 90;
-const PRELOAD_BEHIND = 36;
-const KEEP_RADIUS = 150;
-const MAX_PARALLEL_LOADS = 12;
+const CONCURRENCY = 24; // Optimal concurrency for HTTP/2 multiplexing
+const MAX_RETRIES = 3;
 
+// Global frame cache to keep preloaded images in memory across re-renders/mounts
 const frameCache = new Map<number, HTMLImageElement>();
-const pendingFrames = new Set<number>();
-
-function isFrameNumber(frame: number, totalFrames: number) {
-  return frame >= 1 && frame <= totalFrames;
-}
-
-function getInitialLoadedCount() {
-  let loaded = 0;
-
-  for (let frame = 1; frame <= INITIAL_BATCH; frame++) {
-    if (frameCache.has(frame)) {
-      loaded += 1;
-    }
-  }
-
-  return loaded;
-}
-
-function isInitialBatchReady() {
-  return getInitialLoadedCount() >= INITIAL_BATCH;
-}
-
-function getNearestFrame(frame: number) {
-  if (frameCache.has(frame)) {
-    return frameCache.get(frame) ?? null;
-  }
-
-  for (let offset = 1; offset <= KEEP_RADIUS; offset++) {
-    const nextFrame = frame + offset;
-    const previousFrame = frame - offset;
-
-    if (frameCache.has(nextFrame)) {
-      return frameCache.get(nextFrame) ?? null;
-    }
-
-    if (frameCache.has(previousFrame)) {
-      return frameCache.get(previousFrame) ?? null;
-    }
-  }
-
-  return frameCache.get(1) ?? null;
-}
-
-function loadImage(frame: number): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-
-    image.decoding = "async";
-    image.onload = () => {
-      frameCache.set(frame, image);
-      resolve(image);
-    };
-    image.onerror = () => reject(new Error(`Failed to load frame ${frame}`));
-    image.src = getFrameSrc(frame);
-  });
-}
 
 export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
-  const targetFrameRef = useRef(1);
-  const queueRef = useRef<number[]>([]);
-  const activeLoadsRef = useRef(0);
-  const [, forceRender] = useState(0);
-  const [state, setState] = useState<FrameLoaderState>({
-    getFrame: () => null,
-    setTargetFrame: () => undefined,
-    loaded: frameCache.size,
-    progress: Math.min(getInitialLoadedCount() / INITIAL_BATCH, 1),
-    status: isInitialBatchReady() ? "ready" : "idle",
-    error: null,
-  });
+  const [loadedCount, setLoadedCount] = useState(frameCache.size);
+  const [status, setStatus] = useState<"idle" | "loading" | "ready" | "error">(
+    frameCache.size === totalFrames ? "ready" : "idle"
+  );
+  const [error, setError] = useState<string | null>(null);
 
-  const evictFarFrames = useCallback((centerFrame: number) => {
-    for (const frame of frameCache.keys()) {
-      if (frame !== 1 && Math.abs(frame - centerFrame) > KEEP_RADIUS) {
-        frameCache.delete(frame);
-      }
+  const activeLoadsRef = useRef(0);
+  const queueRef = useRef<number[]>([]);
+  const startedRef = useRef(false);
+
+  // Return the closest loaded frame outward if the requested frame failed or isn't loaded yet
+  const getFrame = useCallback((frameIndex: number) => {
+    const frame = frameIndex + 1;
+    if (frameCache.has(frame)) {
+      return frameCache.get(frame) ?? null;
     }
+    
+    // Search outward for the nearest available frame
+    const maxSearch = 60;
+    for (let offset = 1; offset <= maxSearch; offset++) {
+      const nextFrame = frame + offset;
+      const prevFrame = frame - offset;
+      if (frameCache.has(nextFrame)) return frameCache.get(nextFrame) ?? null;
+      if (frameCache.has(prevFrame)) return frameCache.get(prevFrame) ?? null;
+    }
+    
+    return frameCache.get(1) || null;
   }, []);
 
-  const pumpQueue = useCallback(() => {
-    while (activeLoadsRef.current < MAX_PARALLEL_LOADS && queueRef.current.length > 0) {
-      const frame = queueRef.current.shift();
+  const setTargetFrame = useCallback((_frameIndex: number) => {
+    // No-op. Preloading is fully completed upfront.
+  }, []);
 
-      if (!frame || frameCache.has(frame) || pendingFrames.has(frame)) {
-        continue;
-      }
-
-      pendingFrames.add(frame);
-      activeLoadsRef.current += 1;
-
-      void loadImage(frame)
-        .then((image) => {
-          frameCache.set(frame, image);
-          evictFarFrames(targetFrameRef.current);
-          setState((current) => ({
-            ...current,
-            loaded: frameCache.size,
-            progress: Math.min(getInitialLoadedCount() / INITIAL_BATCH, 1),
-            status: isInitialBatchReady() ? "ready" : current.status,
-          }));
-          forceRender((value) => value + 1);
-        })
-        .catch((error) => {
-          setState((current) => ({
-            ...current,
-            status: isInitialBatchReady() ? current.status : "error",
-            error: error instanceof Error ? error.message : "Failed to load frames",
-          }));
-        })
-        .finally(() => {
-          pendingFrames.delete(frame);
-          activeLoadsRef.current -= 1;
-          pumpQueue();
-        });
-    }
-  }, [evictFarFrames]);
-
-  const enqueueFrames = useCallback((frames: number[], priority = false) => {
-    const queued = new Set(queueRef.current);
-    const nextFrames: number[] = [];
-
-    for (const frame of frames) {
-      if (!isFrameNumber(frame, totalFrames) || frameCache.has(frame) || pendingFrames.has(frame) || queued.has(frame)) {
-        continue;
-      }
-
-      nextFrames.push(frame);
-      queued.add(frame);
-    }
-
-    queueRef.current = priority ? [...nextFrames, ...queueRef.current] : [...queueRef.current, ...nextFrames];
-
-    pumpQueue();
-  }, [pumpQueue, totalFrames]);
-
-  const preloadAround = useCallback((frame: number) => {
-    const frames: number[] = [];
-
-    for (let current = frame; current <= Math.min(totalFrames, frame + PRELOAD_AHEAD); current++) {
-      frames.push(current);
-    }
-
-    for (let current = frame - 1; current >= Math.max(1, frame - PRELOAD_BEHIND); current--) {
-      frames.push(current);
-    }
-
-    frames.sort((a, b) => Math.abs(a - frame) - Math.abs(b - frame));
-    enqueueFrames(frames, true);
-  }, [enqueueFrames, totalFrames]);
-
-  const getFrame = useCallback((frameIndex: number) => getNearestFrame(frameIndex + 1), []);
-
-  const setTargetFrame = useCallback((frameIndex: number) => {
-    const frame = frameIndex + 1;
-
-    targetFrameRef.current = frame;
-    preloadAround(frame);
-    evictFarFrames(frame);
-  }, [evictFarFrames, preloadAround]);
+  const progress = totalFrames > 0 ? loadedCount / totalFrames : 0;
 
   useEffect(() => {
-    setState((current) => ({ ...current, status: isInitialBatchReady() ? "ready" : "loading", error: null }));
-    enqueueFrames(Array.from({ length: INITIAL_BATCH }, (_, index) => index + 1));
-  }, [enqueueFrames]);
+    if (startedRef.current) return;
+    startedRef.current = true;
 
-  return { ...state, getFrame, setTargetFrame };
+    if (frameCache.size === totalFrames) {
+      setStatus("ready");
+      setLoadedCount(totalFrames);
+      return;
+    }
+
+    setStatus("loading");
+
+    // Populate queue with only the frames that haven't been loaded yet
+    const framesToLoad: number[] = [];
+    for (let f = 1; f <= totalFrames; f++) {
+      if (!frameCache.has(f)) {
+        framesToLoad.push(f);
+      }
+    }
+
+    queueRef.current = framesToLoad;
+
+    let aborted = false;
+
+    const loadImageWithRetry = (frame: number, retriesLeft = MAX_RETRIES): Promise<HTMLImageElement> => {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.decoding = "async";
+
+        img.onload = () => {
+          if (aborted) return;
+          
+          if (typeof img.decode === "function") {
+            img.decode()
+              .then(() => {
+                if (aborted) return;
+                frameCache.set(frame, img);
+                resolve(img);
+              })
+              .catch((err) => {
+                // If decoding fails, we still cache the image element so it can be drawn on canvas
+                // (it is still in browser cache and will decode on draw)
+                frameCache.set(frame, img);
+                resolve(img);
+              });
+          } else {
+            frameCache.set(frame, img);
+            resolve(img);
+          }
+        };
+
+        img.onerror = () => {
+          if (aborted) return;
+          if (retriesLeft > 0) {
+            setTimeout(() => {
+              if (aborted) return;
+              loadImageWithRetry(frame, retriesLeft - 1).then(resolve, reject);
+            }, 200);
+          } else {
+            reject(new Error(`Failed to load frame ${frame}`));
+          }
+        };
+
+        img.src = getFrameSrc(frame);
+      });
+    };
+
+    const processQueue = () => {
+      if (aborted) return;
+
+      // When the queue is fully drained and active loads complete, transition to ready
+      if (queueRef.current.length === 0 && activeLoadsRef.current === 0) {
+        setStatus("ready");
+        setLoadedCount(frameCache.size);
+        return;
+      }
+
+      while (activeLoadsRef.current < CONCURRENCY && queueRef.current.length > 0) {
+        const frame = queueRef.current.shift();
+        if (frame === undefined) break;
+
+        activeLoadsRef.current++;
+
+        loadImageWithRetry(frame)
+          .then(() => {
+            if (aborted) return;
+            setLoadedCount(frameCache.size);
+          })
+          .catch((err) => {
+            if (aborted) return;
+            // Robust error handling: print warning but do not crash the load queue.
+            // We still proceed and will fallback to the closest frame when rendering.
+            console.warn(`Frame loader warning (non-fatal): ${err instanceof Error ? err.message : String(err)}`);
+            // We increment loaded count to keep the progress bar moving even if a frame is missing
+            setLoadedCount((prev) => Math.min(prev + 1, totalFrames));
+          })
+          .finally(() => {
+            if (aborted) return;
+            activeLoadsRef.current--;
+            processQueue();
+          });
+      }
+    };
+
+    processQueue();
+
+    return () => {
+      aborted = true;
+    };
+  }, [totalFrames]);
+
+  return {
+    getFrame,
+    setTargetFrame,
+    loaded: loadedCount,
+    progress,
+    status,
+    error,
+  };
 }
+

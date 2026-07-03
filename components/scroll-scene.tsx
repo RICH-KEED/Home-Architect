@@ -18,19 +18,32 @@ const MIN_LOADER_DURATION = 2400;
 
 export function ScrollScene() {
   const canvasRef = useRef<CanvasAnimationHandle | null>(null);
-  const displayedFrameRef = useRef(1);
-  const targetFrameRef = useRef(1);
-  const playbackRafRef = useRef<number | null>(null);
-  const { getFrame, setTargetFrame, loaded, progress: loadProgress, status, error } = useFrameLoader(FRAME_TOTAL);
+  const { getFrame, progress: loadProgress, status, error } = useFrameLoader(FRAME_TOTAL);
   const [loaderProgress, setLoaderProgress] = useState(0);
   const [minimumLoaderDone, setMinimumLoaderDone] = useState(false);
   const [scrollProgress, setScrollProgress] = useState(0);
   const [activeFrame, setActiveFrame] = useState(1);
+  
   const ready = status === "ready" && minimumLoaderDone;
-  const visibleLoaderProgress = ready ? 1 : Math.min(Math.max(loadProgress * 0.85, loaderProgress * 0.92), 0.98);
+  const visibleLoaderProgress = ready ? 1 : Math.max(loadProgress, loaderProgress);
   const loaderStatus = status === "error" ? status : ready ? "ready" : "loading";
 
   useLenis(ready);
+
+  // Disable browser scrolling until all frames are fully preloaded in memory
+  useEffect(() => {
+    if (!ready) {
+      document.body.style.overflow = "hidden";
+      document.body.style.height = "100vh";
+    } else {
+      document.body.style.overflow = "";
+      document.body.style.height = "";
+    }
+    return () => {
+      document.body.style.overflow = "";
+      document.body.style.height = "";
+    };
+  }, [ready]);
 
   useEffect(() => {
     let animationFrame = 0;
@@ -73,35 +86,10 @@ export function ScrollScene() {
     return () => document.removeEventListener("click", onClick);
   }, []);
 
-  const playTowardTarget = useCallback(() => {
-    const currentFrame = displayedFrameRef.current;
-    const targetFrame = targetFrameRef.current;
-
-    if (currentFrame === targetFrame) {
-      playbackRafRef.current = null;
-      return;
-    }
-
-    const delta = targetFrame - currentFrame;
-    const direction = Math.sign(delta);
-    const step = Math.min(Math.max(Math.ceil(Math.abs(delta) * 0.08), 1), 8);
-    const nextFrame = currentFrame + direction * Math.min(step, Math.abs(delta));
-
-    displayedFrameRef.current = nextFrame;
-    canvasRef.current?.renderFrame(nextFrame - 1);
-    setActiveFrame(nextFrame);
-
-    playbackRafRef.current = requestAnimationFrame(playTowardTarget);
-  }, []);
-
   const handleFrame = useCallback((frameIndex: number) => {
-    targetFrameRef.current = frameIndex + 1;
-    setTargetFrame(frameIndex);
-
-    if (!playbackRafRef.current) {
-      playbackRafRef.current = requestAnimationFrame(playTowardTarget);
-    }
-  }, [playTowardTarget, setTargetFrame]);
+    canvasRef.current?.renderFrame(frameIndex);
+    setActiveFrame(frameIndex + 1);
+  }, []);
 
   useScrollAnimation({
     enabled: ready,
@@ -110,17 +98,13 @@ export function ScrollScene() {
     onProgress: setScrollProgress,
   });
 
+  // Render the initial frame as soon as all frames are preloaded and ready
   useEffect(() => {
     if (ready) {
-      canvasRef.current?.renderFrame(displayedFrameRef.current - 1);
+      canvasRef.current?.renderFrame(0);
     }
-  }, [activeFrame, loaded, ready]);
+  }, [ready]);
 
-  useEffect(() => () => {
-    if (playbackRafRef.current) {
-      cancelAnimationFrame(playbackRafRef.current);
-    }
-  }, []);
 
   return (
     <>

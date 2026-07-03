@@ -3,6 +3,19 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   outputFileTracingRoot: __dirname,
+  async headers() {
+    return [
+      {
+        source: "/frames/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
+          },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;
