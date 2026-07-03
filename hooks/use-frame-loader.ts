@@ -8,7 +8,7 @@ const INITIAL_BATCH = 24;
 const PRELOAD_AHEAD = 90;
 const PRELOAD_BEHIND = 36;
 const KEEP_RADIUS = 150;
-const MAX_PARALLEL_LOADS = 8;
+const MAX_PARALLEL_LOADS = 12;
 
 const frameCache = new Map<number, HTMLImageElement>();
 const pendingFrames = new Set<number>();
@@ -128,17 +128,20 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
     }
   }, [evictFarFrames]);
 
-  const enqueueFrames = useCallback((frames: number[]) => {
+  const enqueueFrames = useCallback((frames: number[], priority = false) => {
     const queued = new Set(queueRef.current);
+    const nextFrames: number[] = [];
 
     for (const frame of frames) {
       if (!isFrameNumber(frame, totalFrames) || frameCache.has(frame) || pendingFrames.has(frame) || queued.has(frame)) {
         continue;
       }
 
-      queueRef.current.push(frame);
+      nextFrames.push(frame);
       queued.add(frame);
     }
+
+    queueRef.current = priority ? [...nextFrames, ...queueRef.current] : [...queueRef.current, ...nextFrames];
 
     pumpQueue();
   }, [pumpQueue, totalFrames]);
@@ -154,7 +157,8 @@ export function useFrameLoader(totalFrames = FRAME_TOTAL): FrameLoaderState {
       frames.push(current);
     }
 
-    enqueueFrames(frames);
+    frames.sort((a, b) => Math.abs(a - frame) - Math.abs(b - frame));
+    enqueueFrames(frames, true);
   }, [enqueueFrames, totalFrames]);
 
   const getFrame = useCallback((frameIndex: number) => getNearestFrame(frameIndex + 1), []);
